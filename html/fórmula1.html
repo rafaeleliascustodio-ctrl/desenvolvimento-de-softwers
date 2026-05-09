@@ -1,0 +1,255 @@
+```html
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>F1 Reaction Timer</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #111;
+      color: white;
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .f1-lights {
+      display: flex;
+      gap: 10px;
+      background: #000;
+      padding: 20px;
+      border-radius: 20px;
+      margin-bottom: 40px;
+    }
+
+    .light-strip {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .light {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: #222;
+      transition: 0.15s;
+      box-shadow: inset 0 0 10px #000;
+    }
+
+    .light.on {
+      background: red;
+      box-shadow:
+        0 0 20px red,
+        0 0 40px red;
+    }
+
+    .time {
+      font-size: 70px;
+      font-weight: bold;
+      margin-bottom: 20px;
+    }
+
+    .message {
+      font-size: 30px;
+      color: #ff4444;
+      height: 40px;
+    }
+
+    .help {
+      margin-top: 20px;
+      color: #aaa;
+      text-align: center;
+      font-size: 18px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="f1-lights" id="lights"></div>
+
+  <div class="time" id="time">00.000</div>
+  <div class="message" id="message"></div>
+
+  <div class="help">
+    Clique com o botão esquerdo ou pressione ESPAÇO
+  </div>
+
+  <script>
+    const lightsContainer = document.getElementById("lights");
+    const timeEl = document.getElementById("time");
+    const messageEl = document.getElementById("message");
+
+    // 5 linhas x 4 colunas
+    // colunas: a,b,c,d
+    // vamos acender apenas c,d
+
+    const strips = [];
+    const totalRows = 5;
+    const totalCols = 4;
+
+    for (let row = 0; row < totalRows; row++) {
+      const strip = document.createElement("div");
+      strip.className = "light-strip";
+
+      const rowLights = [];
+
+      for (let col = 0; col < totalCols; col++) {
+        const light = document.createElement("div");
+        light.className = "light";
+        strip.appendChild(light);
+        rowLights.push(light);
+      }
+
+      strips.push(rowLights);
+      lightsContainer.appendChild(strip);
+    }
+
+    let gameState = "idle";
+    let startTime = 0;
+    let timerInterval = null;
+    let sequenceTimeouts = [];
+
+    function clearAllLights() {
+      strips.flat().forEach(light => {
+        light.classList.remove("on");
+      });
+    }
+
+    function resetGame() {
+      clearAllLights();
+
+      clearInterval(timerInterval);
+
+      sequenceTimeouts.forEach(t => clearTimeout(t));
+      sequenceTimeouts = [];
+
+      gameState = "idle";
+      timeEl.textContent = "00.000";
+      messageEl.textContent = "";
+    }
+
+    function startSequence() {
+      resetGame();
+
+      gameState = "starting";
+
+      // Sequência:
+      // 1cd, 2cd, 3cd, 4cd, 5cd
+
+      const delayBetween = 500;
+
+      for (let row = 0; row < 5; row++) {
+        const timeout = setTimeout(() => {
+          // coluna c = índice 2
+          // coluna d = índice 3
+          strips[row][2].classList.add("on");
+          strips[row][3].classList.add("on");
+
+          // Quando todas acenderem
+          if (row === 4) {
+            allLightsOn();
+          }
+
+        }, delayBetween * row);
+
+        sequenceTimeouts.push(timeout);
+      }
+    }
+
+    function allLightsOn() {
+      // Espera aleatória entre 0.5 e 2 segundos
+      const randomDelay = 500 + Math.random() * 1500;
+
+      const timeout = setTimeout(() => {
+        if (gameState !== "starting") return;
+
+        clearAllLights();
+
+        gameState = "running";
+
+        startTime = performance.now();
+
+        timerInterval = setInterval(updateTimer, 1);
+
+      }, randomDelay);
+
+      sequenceTimeouts.push(timeout);
+    }
+
+    function updateTimer() {
+      const now = performance.now();
+      const elapsed = (now - startTime) / 1000;
+
+      timeEl.textContent = elapsed.toFixed(3).padStart(6, "0");
+    }
+
+    function stopTimer() {
+      clearInterval(timerInterval);
+
+      const now = performance.now();
+      const elapsed = (now - startTime) / 1000;
+
+      timeEl.textContent = elapsed.toFixed(3).padStart(6, "0");
+
+      gameState = "finished";
+    }
+
+    function falseStart() {
+      clearInterval(timerInterval);
+
+      messageEl.textContent = "QUEIMA DE LARGADA";
+
+      gameState = "falsestart";
+    }
+
+    function handleInput() {
+
+      // iniciar
+      if (gameState === "idle" || gameState === "finished" || gameState === "falsestart") {
+        startSequence();
+        return;
+      }
+
+      // clicou antes das luzes apagarem
+      if (gameState === "starting") {
+        falseStart();
+        return;
+      }
+
+      // parar timer
+      if (gameState === "running") {
+        stopTimer();
+      }
+    }
+
+    // Mouse esquerdo
+    window.addEventListener("mousedown", (e) => {
+      if (e.button === 0) {
+        handleInput();
+      }
+    });
+
+    // Espaço
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space") {
+        e.preventDefault();
+        handleInput();
+      }
+    });
+  </script>
+
+</body>
+</html>
+```

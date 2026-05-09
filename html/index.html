@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Raycaster Labirinto - 5 Níveis</title>
+    <style>
+        body { margin: 0; background-color: #050505; display: flex; justify-content: center; align-items: center; height: 100vh; color: white; font-family: 'Segoe UI', sans-serif; flex-direction: column; overflow: hidden; user-select: none; }
+        .game-container { position: relative; }
+        canvas { border: 4px solid #333; image-rendering: pixelated; width: 800px; height: 600px; box-shadow: 0px 0px 40px rgba(0,255,0,0.1); cursor: crosshair; }
+        #ui { width: 800px; display: flex; justify-content: space-between; font-size: 16px; font-weight: bold; margin-top: 10px; background: #111; padding: 10px; box-sizing: border-box; border-radius: 4px; border: 1px solid #333; }
+        .status { color: #44ff44; width: 25%; }
+        .weapons { color: #ffcc00; width: 50%; text-align: center; }
+        .inventory { color: #00aaff; width: 25%; text-align: right; }
+        #overlay { position: absolute; top:0; left:0; width: 800px; height: 600px; display: flex; justify-content: center; align-items: center; flex-direction: column; background: rgba(0,0,0,0.8); z-index: 10; pointer-events: none; }
+        h1 { font-size: 50px; color: #ff4444; margin: 0; text-shadow: 2px 2px 0 #000; }
+        p { font-size: 20px; color: #ccc; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <div class="game-container">
+        <div id="overlay">
+            <h1 id="screenTitle">LABIRINTO MORTAL</h1>
+            <p id="screenSub">Clique na tela para iniciar o Áudio e Jogar</p>
+            <p style="font-size: 14px; color: #666; margin-top: 20px;">CACE OS INIMIGOS NO MINIMAPA PARA ABRIR AS PORTAS VERMELHAS</p>
+            <p style="font-size: 14px; color: #444;">WASD: Move | ESPAÇO: Atira | 1-3: Armas | E: Ação | P: Pause</p>
+        </div>
+        <canvas id="gameCanvas" width="320" height="240"></canvas>
+    </div>
+    
+    <div id="ui">
+        <span id="hpDisplay" class="status">VIDA: 100 | COLETE: 0</span>
+        <span id="weaponDisplay" class="weapons">[1] PISTOLA | MUNIÇÃO: 50</span>
+        <span id="invDisplay" class="inventory">NÍVEL: 1/5</span>
+    </div>
+
+<script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const screenW = canvas.width; const screenH = canvas.height;
+    
+    const hpDisplay = document.getElementById("hpDisplay");
+    const weaponDisplay = document.getElementById("weaponDisplay");
+    const invDisplay = document.getElementById("invDisplay");
+    const overlay = document.getElementById("overlay");
+    const screenTitle = document.getElementById("screenTitle");
+    const screenSub = document.getElementById("screenSub");
+
+    let gameState = "MENU"; 
+    let lastTime = 0; let deltaTime = 0;
+    let currentMsg = ""; let msgTimer = 0;
+
+    // =====================================================================
+    // MOTOR DE ÁUDIO
+    // =====================================================================
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    let actx;
+    function initAudio() { if (!actx) actx = new AudioContext(); if (actx.state === 'suspended') actx.resume(); }
+    function playSound(type) {
+        if (!actx) return; const osc = actx.createOscillator(); const gain = actx.createGain();
+        osc.connect(gain); gain.connect(actx.destination); const now = actx.currentTime;
+        if (type === 'pistol') { osc.type = 'square'; osc.frequency.setValueAtTime(150, now); osc.frequency.exponentialRampToValueAtTime(0.01, now + 0.1); gain.gain.setValueAtTime(0.3, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); } 
+        else if (type === 'shotgun') { osc.type = 'sawtooth'; osc.frequency.setValueAtTime(100, now); osc.frequency.exponentialRampToValueAtTime(0.01, now + 0.3); gain.gain.setValueAtTime(0.5, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3); osc.start(now); osc.stop(now + 0.3); } 
+        else if (type === 'empty') { osc.type = 'sine'; osc.frequency.setValueAtTime(800, now); gain.gain.setValueAtTime(0.1, now); gain.gain.linearRampToValueAtTime(0, now + 0.05); osc.start(now); osc.stop(now + 0.05); } 
+        else if (type === 'hurt') { osc.type = 'sawtooth'; osc.frequency.setValueAtTime(50, now); osc.frequency.linearRampToValueAtTime(20, now + 0.2); gain.gain.setValueAtTime(0.5, now); gain.gain.linearRampToValueAtTime(0.01, now + 0.2); osc.start(now); osc.stop(now + 0.2); } 
+        else if (type === 'enemyHurt') { osc.type = 'square'; osc.frequency.setValueAtTime(300, now); osc.frequency.exponentialRampToValueAtTime(50, now + 0.15); gain.gain.setValueAtTime(0.2, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15); osc.start(now); osc.stop(now + 0.15); } 
+        else if (type === 'item') { osc.type = 'sine'; osc.frequency.setValueAtTime(400, now); osc.frequency.setValueAtTime(600, now + 0.1); gain.gain.setValueAtTime(0.2, now); gain.gain.linearRampToValueAtTime(0, now + 0.3); osc.start(now); osc.stop(now + 0.3); } 
+        else if (type === 'door') { osc.type = 'triangle'; osc.frequency.setValueAtTime(100, now); osc.frequency.linearRampToValueAtTime(50, now + 0.5); gain.gain.setValueAtTime(0.3, now); gain.gain.linearRampToValueAtTime(0, now + 0.5); osc.start(now); osc.stop(now + 0.5); }
+    }
+
+    // =====================================================================
+    // SISTEMA DE NÍVEIS ESTILO LABIRINTO (0=Chão, 1=Parede, 3=Saída, 7=Porta Arena)
+    // =====================================================================
+    const mapW = 20; const mapH = 20;
+    function parseMap(strArray) { return strArray.map(row => row.split('').map(Number)); }
+
+const levelDefs = [
+        // NÍVEL 1: Labirinto Inicial (2 Salas)
+        {
+            map: parseMap([
+                "11111111111111111111",
+                "10000000000000000001",
+                "10111111111111111101",
+                "10100000000000000101",
+                "10101111111111110101",
+                "10101000000000010101",
+                "10101011111111010101",
+                "10101000000001010101",
+                "10101111111101010101",
+                "10100000010001000101",
+                "10111111017111110101", // Porta no [10,10]
+                "10000001010100010101",
+                "11111101010101010101",
+                "10000001010001000101",
+                "10111111011111111101",
+                "10100000000000000001",
+                "10101111111111111111",
+                "10100000000000000001",
+                "10111111111111111031", // Saída no [18,18]
+                "11111111111111111111"
+            ]),
+            startX: 1.5, startY: 1.5,
+            enemies: [
+                {x: 7.5, y: 1.5, hp: 60, room: 1, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 1.5, y: 7.5, hp: 60, room: 1, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 17.5, y: 1.5, hp: 60, room: 1, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 1.5, y: 11.5, hp: 60, room: 2, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 17.5, y: 11.5, hp: 120, room: 2, state: 'idle', color: '#aa00ff', timer: 0}
+            ],
+            items: [ {x: 1.5, y: 3.5, type: 'ammo_shotgun', active: true, color: '#ff8800'} ],
+            progression: [ {room: 1, door: [10,10], cleared: false} ]
+        },
+        // NÍVEL 2: Labirinto Ziguezague (3 Salas)
+        {
+            map: parseMap([
+                "11111111111111111111",
+                "10000000000000000001",
+                "10111111111111111101",
+                "10100000000000000101",
+                "10101111111111110101",
+                "10101000000000010101",
+                "10101011111111010101",
+                "10001000000001010001",
+                "11111111111101111171", // Porta 1 no [18,8]
+                "10000000000100000001",
+                "10111111110111111101",
+                "10100000010000000101",
+                "10101111011111110101",
+                "10101001000000010101",
+                "10001001111111010171", // Porta 2 no [18,14]
+                "10111110000000101001",
+                "10000111111101011111",
+                "10110000000101000001",
+                "10001111110101111131", // Saída no [18,18]
+                "11111111111111111111"
+            ]),
+            startX: 1.5, startY: 1.5,
+            enemies: [
+                {x: 18.5, y: 1.5, hp: 60, room: 1, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 1.5, y: 7.5, hp: 60, room: 1, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 17.5, y: 7.5, hp: 60, room: 1, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 1.5, y: 9.5, hp: 60, room: 2, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 18.5, y: 13.5, hp: 120, room: 2, state: 'idle', color: '#aa00ff', timer: 0},
+                {x: 1.5, y: 18.5, hp: 120, room: 3, state: 'idle', color: '#aa00ff', timer: 0}
+            ],
+            items: [ {x: 1.5, y: 5.5, type: 'medkit', active: true, color: '#00ff00'} ],
+            progression: [ {room: 1, door: [18,8], cleared: false}, {room: 2, door: [18,14], cleared: false} ]
+        },
+        // NÍVEL 3: Labirinto Ramificado (3 Salas)
+        {
+            map: parseMap([
+                "11111111111111111111",
+                "10000000000000000001",
+                "10111110101111111101",
+                "10100010100000000101",
+                "10101010111111110101",
+                "10001010000000010001",
+                "11711011111111011111", // Porta 1 no [2,6]
+                "10001000000001000001",
+                "10101111111101111101",
+                "10100000000100000101",
+                "10111111110111110101",
+                "10000000010000010101",
+                "11111111011111010101",
+                "10000001000001010101",
+                "10111171111101010101", // Porta 2 no [6,14]
+                "10100000000101010001",
+                "10101111110101011111",
+                "10101000010101000001",
+                "10001011010001111131", // Saída no [18,18]
+                "11111111111111111111"
+            ]),
+            startX: 1.5, startY: 1.5,
+            enemies: [
+                {x: 18.5, y: 1.5, hp: 60, room: 1, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 1.5, y: 5.5, hp: 60, room: 1, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 1.5, y: 7.5, hp: 120, room: 2, state: 'idle', color: '#aa00ff', timer: 0},
+                {x: 17.5, y: 11.5, hp: 60, room: 2, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 1.5, y: 13.5, hp: 60, room: 2, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 1.5, y: 18.5, hp: 60, room: 3, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 14.5, y: 17.5, hp: 120, room: 3, state: 'idle', color: '#aa00ff', timer: 0}
+            ],
+            items: [ {x: 18.5, y: 7.5, type: 'ammo_minigun', active: true, color: '#ffff00'} ],
+            progression: [ {room: 1, door: [2,6], cleared: false}, {room: 2, door: [6,14], cleared: false} ]
+        },
+        // NÍVEL 4: Grade da Agonia (4 Salas)
+        {
+            map: parseMap([
+                "11111111111111111111",
+                "10001000000010000001",
+                "10101011111010111101",
+                "10101010001010100001",
+                "10100010100010001101",
+                "11111711111111111101", // Porta 1 no [5,5]
+                "10000010000000000001",
+                "10111110111111111111",
+                "10100000100000000001",
+                "10101111101111111101",
+                "10001000001000000001",
+                "11111111101011111171", // Porta 2 no [18,11]
+                "10000000101010000001",
+                "10111110101010111111",
+                "10100000101010000001",
+                "10101111101011111171", // Porta 3 no [18,15]
+                "10100000001000000001",
+                "10111111111111111101",
+                "10000000000000000031", // Saída no [18,18]
+                "11111111111111111111"
+            ]),
+            startX: 1.5, startY: 1.5,
+            enemies: [
+                {x: 17.5, y: 1.5, hp: 60, room: 1, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 1.5, y: 4.5, hp: 60, room: 1, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 1.5, y: 6.5, hp: 60, room: 2, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 17.5, y: 8.5, hp: 120, room: 2, state: 'idle', color: '#aa00ff', timer: 0},
+                {x: 1.5, y: 10.5, hp: 60, room: 2, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 1.5, y: 12.5, hp: 60, room: 3, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 15.5, y: 14.5, hp: 120, room: 3, state: 'idle', color: '#aa00ff', timer: 0},
+                {x: 1.5, y: 18.5, hp: 120, room: 4, state: 'idle', color: '#aa00ff', timer: 0}
+            ],
+            items: [ {x: 17.5, y: 10.5, type: 'medkit', active: true, color: '#00ff00'} ],
+            progression: [ {room: 1, door: [5,5], cleared: false}, {room: 2, door: [18,11], cleared: false}, {room: 3, door: [18,15], cleared: false} ]
+        },
+        // NÍVEL 5: Labirinto do Chefe (5 Salas)
+        {
+            map: parseMap([
+                "11111111111111111111",
+                "10000010000000100001",
+                "10111010111110101101",
+                "10100010100010100001",
+                "10101110101010111171", // Porta 1 no [18,4]
+                "10000000001000000001",
+                "11111111111111111101",
+                "10000000000000000001",
+                "10111111111111111171", // Porta 2 no [18,8]
+                "10000000000010000001",
+                "11111111111010111111",
+                "10000000001010100001",
+                "10111111101010101101",
+                "10000000001000000071", // Porta 3 no [18,13]
+                "11111111111111111101",
+                "10000010000010000001",
+                "10111010111010111171", // Porta 4 no [18,16]
+                "10100010100010100001",
+                "10001110001110001131", // Saída final no [18,18]
+                "11111111111111111111"
+            ]),
+            startX: 1.5, startY: 1.5,
+            enemies: [
+                {x: 9.5, y: 1.5, hp: 60, room: 1, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 1.5, y: 3.5, hp: 60, room: 1, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 17.5, y: 3.5, hp: 120, room: 1, state: 'idle', color: '#aa00ff', timer: 0},
+                {x: 1.5, y: 5.5, hp: 60, room: 2, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 17.5, y: 7.5, hp: 120, room: 2, state: 'idle', color: '#aa00ff', timer: 0},
+                {x: 1.5, y: 9.5, hp: 60, room: 3, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 15.5, y: 11.5, hp: 120, room: 3, state: 'idle', color: '#aa00ff', timer: 0},
+                {x: 1.5, y: 15.5, hp: 120, room: 4, state: 'idle', color: '#aa00ff', timer: 0},
+                {x: 1.5, y: 17.5, hp: 60, room: 5, state: 'idle', color: '#ff2222', timer: 0},
+                {x: 14.5, y: 18.5, hp: 120, room: 5, state: 'idle', color: '#aa00ff', timer: 0}
+            ],
+            items: [ {x: 1.5, y: 7.5, type: 'ammo_minigun', active: true, color: '#ffff00'}, {x: 17.5, y: 11.5, type: 'medkit', active: true, color: '#00ff00'} ],
+            progression: [ {room: 1, door: [18,4], cleared: false}, {room: 2, door: [18,8], cleared: false}, {room: 3, door: [18,13], cleared: false}, {room: 4, door: [18,16], cleared: false} ]
+        }
+    ];
+
+    let currentLevel = 0;
+    let mapData = []; let doors = {}; let enemies = []; let items = []; let progression = [];
+    let player = { x: 0, y: 0, dir: -Math.PI/2, fov: Math.PI / 3, hp: 100, armor: 0, bob: 0, damageOverlay: 0 };
+    
+    let weapons = [
+        { id: 1, name: "PISTOLA", ammo: 50, damage: 30, fireRate: 300, recoil: 15, sound: 'pistol', type: 'single' },
+        { id: 2, name: "ESCOPETA", ammo: 20, damage: 90, fireRate: 800, recoil: 40, sound: 'shotgun', type: 'spread' },
+        { id: 3, name: "MINIGUN", ammo: 50, damage: 15, fireRate: 80, recoil: 10, sound: 'pistol', type: 'auto' }
+    ];
+    let currentWep = 0; let lastFired = 0; let gunRecoilAnim = 0; let flashTimer = 0;
+    let particles = []; let zBuffer = new Array(screenW);
+    const keys = { w: false, s: false, a: false, d: false, space: false, e: false };
+
+    function showMessage(text) { currentMsg = text; msgTimer = 2000; }
+
+    function loadLevel(index) {
+        let def = levelDefs[index];
+        mapData = JSON.parse(JSON.stringify(def.map)); 
+        player.x = def.startX; player.y = def.startY; player.dir = -Math.PI/2;
+        enemies = JSON.parse(JSON.stringify(def.enemies));
+        items = JSON.parse(JSON.stringify(def.items));
+        progression = JSON.parse(JSON.stringify(def.progression));
+        
+        doors = {};
+        for(let y=0; y<mapH; y++) {
+            for(let x=0; x<mapW; x++) {
+                if(mapData[y][x] === 5 || mapData[y][x] === 7) {
+                    doors[`${x},${y}`] = { type: mapData[y][x], state: 'closed', offset: 0 };
+                }
+            }
+        }
+        updateHUD(); showMessage(`NÍVEL ${index + 1} INICIADO!`);
+    }
+
+    function fullResetGame() {
+        currentLevel = 0; player.hp = 100; player.armor = 0;
+        weapons[0].ammo = 50; weapons[1].ammo = 20; weapons[2].ammo = 50; currentWep = 0;
+        loadLevel(currentLevel);
+    }
+
+    // =====================================================================
+    // CONTROLES E EVENTOS
+    // =====================================================================
+    window.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowUp" || e.key.toLowerCase() === "w") keys.w = true;
+        if (e.key === "ArrowDown" || e.key.toLowerCase() === "s") keys.s = true;
+        if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") keys.a = true;
+        if (e.key === "ArrowRight" || e.key.toLowerCase() === "d") keys.d = true;
+        if (e.key.toLowerCase() === "e") keys.e = true;
+        if (e.key === " ") keys.space = true;
+        if (e.key === "1") currentWep = 0; if (e.key === "2") currentWep = 1; if (e.key === "3") currentWep = 2;
+        if (e.key.toLowerCase() === "p" || e.key === "Escape") { if (gameState === "PLAYING") setGameState("PAUSED"); else if (gameState === "PAUSED") setGameState("PLAYING"); }
+        updateHUD();
+    });
+
+    window.addEventListener("keyup", (e) => {
+        if (e.key === "ArrowUp" || e.key.toLowerCase() === "w") keys.w = false;
+        if (e.key === "ArrowDown" || e.key.toLowerCase() === "s") keys.s = false;
+        if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") keys.a = false;
+        if (e.key === "ArrowRight" || e.key.toLowerCase() === "d") keys.d = false;
+        if (e.key.toLowerCase() === "e") keys.e = false;
+        if (e.key === " ") keys.space = false;
+    });
+
+    window.addEventListener("mousedown", () => {
+        if (gameState === "MENU" || gameState === "GAMEOVER" || gameState === "WIN") {
+            initAudio(); fullResetGame(); setGameState("PLAYING");
+        }
+    });
+
+    function setGameState(state) {
+        gameState = state;
+        if (state === "PLAYING") { overlay.classList.add("hidden"); }
+        else {
+            overlay.classList.remove("hidden");
+            if (state === "MENU") { screenTitle.innerText = "LABIRINTO MORTAL"; screenSub.innerText = "Clique para Iniciar"; }
+            if (state === "PAUSED") { screenTitle.innerText = "PAUSADO"; screenSub.innerText = "Aperte P para Voltar"; }
+            if (state === "GAMEOVER") { screenTitle.innerText = "VOCÊ MORREU"; screenSub.innerText = "Clique para Tentar Novamente"; screenTitle.style.color = "#ff0000"; }
+            if (state === "WIN") { screenTitle.innerText = "JOGO ZERADO!"; screenSub.innerText = "Você Sobreviveu ao Labirinto"; screenTitle.style.color = "#00ff00"; }
+        }
+    }
+
+    function updateHUD() {
+        hpDisplay.innerText = `VIDA: ${player.hp} | COLETE: ${player.armor}`; hpDisplay.style.color = player.hp > 50 ? "#44ff44" : "#ff4444";
+        weaponDisplay.innerText = `[${currentWep+1}] ${weapons[currentWep].name} | MUNIÇÃO: ${weapons[currentWep].ammo}`;
+        invDisplay.innerText = `NÍVEL: ${currentLevel + 1}/5`; invDisplay.style.color = "#00aaff";
+    }
+
+    function spawnParticles(x, y, color, amount) { for(let i=0; i<amount; i++) particles.push({ x: x, y: y, vx: (Math.random()-0.5)*15, vy: (Math.random()-0.5)*15 - 5, life: 1.0, color: color }); }
+
+    // =====================================================================
+    // LOOP PRINCIPAL
+    // =====================================================================
+    function gameLoop(timestamp) {
+        requestAnimationFrame(gameLoop);
+        if (!lastTime) lastTime = timestamp; deltaTime = timestamp - lastTime; lastTime = timestamp;
+
+        if (gameState !== "PLAYING") return;
+
+        let moveSpeed = 0.003 * deltaTime; const rotSpeed = 0.0025 * deltaTime; let isMoving = false;
+        if (keys.a) player.dir -= rotSpeed; if (keys.d) player.dir += rotSpeed;
+        
+        let mStpX = 0; let mStpY = 0;
+        if (keys.w) { mStpX = Math.cos(player.dir) * moveSpeed; mStpY = Math.sin(player.dir) * moveSpeed; }
+        if (keys.s) { mStpX = -Math.cos(player.dir) * moveSpeed; mStpY = -Math.sin(player.dir) * moveSpeed; }
+
+        if (mStpX !== 0 || mStpY !== 0) {
+            let nX = player.x + mStpX; let nY = player.y + mStpY;
+            if (mapData[Math.floor(player.y)][Math.floor(nX)] === 0 || mapData[Math.floor(player.y)][Math.floor(nX)] === 3) player.x = nX;
+            if (mapData[Math.floor(nY)][Math.floor(player.x)] === 0 || mapData[Math.floor(nY)][Math.floor(player.x)] === 3) player.y = nY;
+            isMoving = true;
+        }
+
+        if (isMoving) player.bob += deltaTime * 0.01; let bobOffset = isMoving ? Math.sin(player.bob) * 6 : 0;
+        if (gunRecoilAnim > 0) gunRecoilAnim -= deltaTime * 0.1;
+        if (player.damageOverlay > 0) player.damageOverlay -= deltaTime * 0.05;
+
+        // Portas Interativas (Tipo 5)
+        if (keys.e) {
+            let fX = Math.floor(player.x + Math.cos(player.dir) * 1.2); let fY = Math.floor(player.y + Math.sin(player.dir) * 1.2);
+            let dKey = `${fX},${fY}`;
+            if (doors[dKey] && doors[dKey].state === 'closed' && doors[dKey].type === 5) { doors[dKey].state = 'opening'; playSound('door'); }
+            keys.e = false; 
+        }
+
+        // Portas de Progresso (Mata monstros da sala e abre sozinha)
+        progression.forEach(p => {
+            if (!p.cleared) {
+                let alive = enemies.filter(e => e.room === p.room && e.state !== 'dead').length;
+                if (alive === 0) {
+                    p.cleared = true; let dKey = `${p.door[0]},${p.door[1]}`;
+                    if (doors[dKey]) { doors[dKey].state = 'opening'; playSound('door'); showMessage(`SEÇÃO DO LABIRINTO LIBERADA!`); }
+                }
+            }
+        });
+
+        // Animação de Portas
+        for (let key in doors) {
+            let d = doors[key];
+            if (d.state === 'opening') {
+                d.offset += deltaTime * 0.002;
+                if (d.offset >= 1) { d.offset = 1; d.state = 'open'; mapData[key.split(',')[1]][key.split(',')[0]] = 0; }
+            }
+        }
+
+        // Troca de Nível (Pisar no Verde)
+        if (mapData[Math.floor(player.y)][Math.floor(player.x)] === 3) {
+            if (currentLevel < levelDefs.length - 1) { currentLevel++; loadLevel(currentLevel); } 
+            else { setGameState("WIN"); }
+        }
+
+        // Itens
+        items.forEach(item => {
+            if (item.active && Math.sqrt(Math.pow(player.x - item.x, 2) + Math.pow(player.y - item.y, 2)) < 0.6) {
+                let col = false;
+                if (item.type === 'medkit' && player.hp < 100) { player.hp = Math.min(100, player.hp + 50); col = true; showMessage("Vida Curada!"); }
+                else if (item.type === 'armor' && player.armor < 100) { player.armor = Math.min(100, player.armor + 50); col = true; showMessage("Colete Equipado!"); }
+                else if (item.type === 'ammo_shotgun') { weapons[1].ammo += 15; col = true; showMessage("Munição de Escopeta!"); }
+                else if (item.type === 'ammo_minigun') { weapons[2].ammo += 100; col = true; showMessage("Munição de Minigun!"); }
+                if (col) { item.active = false; playSound('item'); updateHUD(); }
+            }
+        });
+
+        // Inimigos
+        enemies.forEach(enemy => {
+            if (enemy.state === 'dead') return;
+            let dist = Math.sqrt(Math.pow(player.x - enemy.x, 2) + Math.pow(player.y - enemy.y, 2));
+            if (enemy.state === 'hurt' && timestamp > enemy.timer) enemy.state = 'chase';
+            if (enemy.state !== 'hurt') {
+                if (dist < 10 && dist > 1.0) { 
+                    let mX = ((player.x - enemy.x) / dist) * (deltaTime * 0.0015); let mY = ((player.y - enemy.y) / dist) * (deltaTime * 0.0015);
+                    if (mapData[Math.floor(enemy.y)][Math.floor(enemy.x + mX)] === 0) enemy.x += mX;
+                    if (mapData[Math.floor(enemy.y + mY)][Math.floor(enemy.x)] === 0) enemy.y += mY;
+                } else if (dist <= 1.0 && timestamp > enemy.timer) { 
+                    let dmg = enemy.color === '#aa00ff' ? 25 : 10;
+                    if (player.armor > 0) { player.armor -= dmg; if(player.armor < 0) { player.hp += player.armor; player.armor = 0; } } else { player.hp -= dmg; }
+                    player.damageOverlay = 100; enemy.timer = timestamp + 1000; playSound('hurt'); updateHUD();
+                    if (player.hp <= 0) setGameState("GAMEOVER");
+                }
+            }
+        });
+
+        // Tiros
+        let wep = weapons[currentWep];
+        if (keys.space && timestamp - lastFired > wep.fireRate) {
+            if (wep.ammo <= 0) { playSound('empty'); lastFired = timestamp; showMessage("SEM MUNIÇÃO!"); }
+            else {
+                wep.ammo--; lastFired = timestamp; flashTimer = 3; gunRecoilAnim = wep.recoil; playSound(wep.sound); updateHUD();
+                let rays = wep.type === 'spread' ? 5 : 1;
+                for(let r=0; r<rays; r++) {
+                    let spread = wep.type === 'spread' ? (Math.random() - 0.5) * 0.2 : 0; let aimDir = player.dir + spread;
+                    for (let i = 0; i < enemies.length; i++) {
+                        let enemy = enemies[i]; if (enemy.state === 'dead') continue;
+                        let dx = enemy.x - player.x; let dy = enemy.y - player.y; let dist = Math.sqrt(dx*dx + dy*dy);
+                        let aDiff = Math.atan2(dy, dx) - aimDir;
+                        while (aDiff < -Math.PI) aDiff += 2 * Math.PI; while (aDiff > Math.PI) aDiff -= 2 * Math.PI;
+                        if (Math.abs(aDiff) < 0.4 / dist) {
+                            let sX = Math.floor((0.5 * (aDiff / (player.fov / 2)) + 0.5) * screenW);
+                            if (sX >= 0 && sX < screenW && (dist * Math.cos(aDiff)) < zBuffer[sX]) {
+                                enemy.hp -= wep.damage; enemy.state = 'hurt'; enemy.timer = timestamp + 200;
+                                playSound('enemyHurt'); spawnParticles(sX, screenH/2, '#ff0000', 10);
+                                if (enemy.hp <= 0) { enemy.state = 'dead'; enemy.color = '#440000'; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- RENDERIZAÇÃO ---
+        let horizon = (screenH / 2) + bobOffset;
+        let cGrad = ctx.createLinearGradient(0, 0, 0, horizon); cGrad.addColorStop(0, "#000"); cGrad.addColorStop(1, "#2a2a2a");
+        ctx.fillStyle = cGrad; ctx.fillRect(0, 0, screenW, horizon);
+        let fGrad = ctx.createLinearGradient(0, horizon, 0, screenH); fGrad.addColorStop(0, "#333"); fGrad.addColorStop(1, "#111");
+        ctx.fillStyle = fGrad; ctx.fillRect(0, horizon, screenW, screenH - horizon);
+
+        // Raycasting
+        for (let x = 0; x < screenW; x++) {
+            let rayAngle = (player.dir - player.fov / 2.0) + ((x / screenW) * player.fov);
+            let distance = 0; let hitWall = false; let isVert = false; let bType = 0; let mX = 0, mY = 0;
+            let eyeX = Math.cos(rayAngle); let eyeY = Math.sin(rayAngle);
+
+            while (!hitWall && distance < 20) {
+                distance += 0.05;
+                let tX = player.x + eyeX * distance; let tY = player.y + eyeY * distance;
+                mX = Math.floor(tX); mY = Math.floor(tY);
+                if (mX < 0 || mX >= mapW || mY < 0 || mY >= mapH) { hitWall = true; distance = 20; bType = 1; }
+                else if (mapData[mY][mX] > 0 && mapData[mY][mX] !== 3) { hitWall = true; bType = mapData[mY][mX]; if (Math.abs((tX - mX) - 0.5) > Math.abs((tY - mY) - 0.5)) isVert = true; }
+            }
+
+            let corrDist = distance * Math.cos(rayAngle - player.dir); zBuffer[x] = corrDist; 
+            let wallH = screenH / corrDist; let ceiling = horizon - (wallH/2);
+            let shade = Math.max(0, 255 - corrDist * 15);
+            if (isVert) shade *= 0.6; 
+            if ((mX + mY) % 2 === 0) shade *= 0.85; 
+
+            let color = `rgb(${shade}, ${shade}, ${shade})`; 
+            if (bType === 4) color = `rgb(${shade/2}, ${shade/3}, ${shade/4})`; 
+            if (bType === 6) color = `rgb(${shade}, ${shade/1.5}, ${shade/2})`; 
+            if (bType === 5) color = `rgb(${shade/1.5}, ${shade/1.5}, ${shade/1.5})`; 
+            if (bType === 7) color = `rgb(${shade}, ${shade/5}, ${shade/5})`;
+
+            ctx.fillStyle = color; ctx.fillRect(x, ceiling, 1, wallH);
+            if (bType === 1 || bType === 4 || bType === 6) { ctx.fillStyle = `rgba(0,0,0,0.3)`; ctx.fillRect(x, ceiling + wallH*0.2, 1, wallH*0.05); ctx.fillRect(x, ceiling + wallH*0.8, 1, wallH*0.05); }
+        }
+
+        // Entidades
+        let ents = [...enemies, ...items.filter(i => i.active)];
+        ents.sort((a, b) => (Math.pow(player.x - b.x, 2) + Math.pow(player.y - b.y, 2)) - (Math.pow(player.x - a.x, 2) + Math.pow(player.y - a.y, 2)));
+        ents.forEach(ent => {
+            let dx = ent.x - player.x; let dy = ent.y - player.y; let dist = Math.sqrt(dx*dx + dy*dy);
+            let aDiff = Math.atan2(dy, dx) - player.dir;
+            while (aDiff < -Math.PI) aDiff += 2 * Math.PI; while (aDiff > Math.PI) aDiff -= 2 * Math.PI;
+            if (dist > 0.4 && Math.abs(aDiff) < player.fov) {
+                let sX = (0.5 * (aDiff / (player.fov / 2)) + 0.5) * screenW; let sSize = screenH / dist;
+                if (sX >= -sSize && sX < screenW + sSize && (dist * Math.cos(aDiff)) < zBuffer[Math.floor(sX)]) {
+                    let sY = horizon + (sSize / 4);
+                    if (ent.hp !== undefined) { 
+                        sY = ent.state === 'dead' ? horizon + (sSize / 2.5) : horizon - (sSize / 4); let sH = ent.state === 'dead' ? sSize/4 : sSize;
+                        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(sX - sSize/3, horizon + sSize/1.5, sSize/1.5, sSize/8);
+                        ctx.fillStyle = ent.color; ctx.fillRect(sX - sSize/4, sY, sSize/2, sH);
+                        if (ent.state !== 'dead') {
+                            ctx.fillStyle = "#fff"; ctx.fillRect(sX - sSize/8, sY + sSize/8, sSize/4, sSize/6);
+                            ctx.fillStyle = ent.state === 'hurt' ? "red" : "black"; 
+                            ctx.fillRect(sX - sSize/12, sY + sSize/6, sSize/16, sSize/16); ctx.fillRect(sX + sSize/32, sY + sSize/6, sSize/16, sSize/16);
+                        }
+                    } else { 
+                        let floatY = Math.sin(timestamp * 0.005) * (sSize*0.05); let iW = Math.max(2, Math.abs(Math.cos(timestamp * 0.003)) * (sSize/2));
+                        ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(sX - sSize/4, horizon + sSize/2, sSize/2, sSize/10);
+                        ctx.fillStyle = ent.color; ctx.fillRect(sX - iW/2, sY + floatY, iW, sSize/2);
+                        if (ent.type === 'medkit') { ctx.fillStyle = "#fff"; ctx.fillRect(sX-iW/8, sY+floatY+sSize/8, iW/4, sSize/4); ctx.fillRect(sX-iW/4, sY+floatY+sSize/5.5, iW/2, sSize/8); }
+                    }
+                }
+            }
+        });
+
+        // Visuais
+        for(let i = particles.length - 1; i >= 0; i--) { let p = particles[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.8; p.life -= 0.05; if(p.life <= 0) { particles.splice(i, 1); continue; } ctx.globalAlpha = p.life; ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 5, 5); } ctx.globalAlpha = 1.0;
+
+        let wOffsetY = Math.max(0, gunRecoilAnim) + bobOffset; let wOffsetX = currentWep === 2 ? Math.random()*4-2 : 0; 
+        ctx.fillStyle = "#222"; 
+        if (currentWep === 0) { ctx.fillRect(screenW/2 - 15 + wOffsetX, screenH - 120 + wOffsetY, 30, 120); ctx.fillStyle = "#555"; ctx.fillRect(screenW/2 - 10 + wOffsetX, screenH - 110 + wOffsetY, 20, 110); } 
+        else if (currentWep === 1) { ctx.fillRect(screenW/2 - 30 + wOffsetX, screenH - 150 + wOffsetY, 60, 150); ctx.fillStyle = "#111"; ctx.fillRect(screenW/2 - 5 + wOffsetX, screenH - 150 + wOffsetY, 10, 150); } 
+        else if (currentWep === 2) { ctx.fillRect(screenW/2 - 40 + wOffsetX, screenH - 100 + wOffsetY, 80, 100); ctx.fillStyle = "#444"; ctx.fillRect(screenW/2 - 35 + wOffsetX, screenH - 100 + wOffsetY, 20, 100); ctx.fillRect(screenW/2 - 5 + wOffsetX, screenH - 100 + wOffsetY, 10, 100); ctx.fillRect(screenW/2 + 15 + wOffsetX, screenH - 100 + wOffsetY, 20, 100); }
+        if (flashTimer > 0) { ctx.fillStyle = "rgba(255, 220, 50, 0.9)"; ctx.beginPath(); ctx.arc(screenW/2 + wOffsetX, screenH - (currentWep===1?150:120) + wOffsetY, currentWep===1?60:40, 0, Math.PI*2); ctx.fill(); flashTimer--; ctx.fillStyle = "rgba(255, 200, 100, 0.1)"; ctx.fillRect(0, 0, screenW, screenH); }
+
+        if (player.damageOverlay > 0) { ctx.fillStyle = `rgba(255, 0, 0, ${Math.min(0.7, player.damageOverlay / 100)})`; ctx.fillRect(0, 0, screenW, screenH); }
+        ctx.fillStyle = "rgba(255, 255, 255, 0.6)"; ctx.fillRect(screenW/2 - 2, screenH/2 - 8, 4, 16); ctx.fillRect(screenW/2 - 8, screenH/2 - 2, 16, 4);
+
+        // --- MINIMAPA ATUALIZADO (RASTreador DE INIMIGOS) ---
+        const mapScale = 4; const mapPad = 10;
+        ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(mapPad - 2, mapPad - 2, mapW*mapScale + 4, mapH*mapScale + 4);
+        for(let y=0; y<mapH; y++) {
+            for(let x=0; x<mapW; x++) {
+                if(mapData[y][x] > 0 && mapData[y][x] !== 3) {
+                    ctx.fillStyle = (mapData[y][x] === 7) ? "#ff0000" : (mapData[y][x] === 5) ? "#555" : "#999"; 
+                    ctx.fillRect(mapPad+x*mapScale, mapPad+y*mapScale, mapScale, mapScale); 
+                }
+                if(mapData[y][x] === 3) { ctx.fillStyle = "#00ff00"; ctx.fillRect(mapPad+x*mapScale, mapPad+y*mapScale, mapScale, mapScale); }
+            }
+        }
+        
+        // Ponto do Jogador
+        ctx.fillStyle = "#00ff00"; ctx.fillRect(mapPad+player.x*mapScale-2, mapPad+player.y*mapScale-2, 4, 4);
+        ctx.strokeStyle = "rgba(255,255,0,0.8)"; ctx.beginPath(); ctx.moveTo(mapPad+player.x*mapScale, mapPad+player.y*mapScale);
+        ctx.lineTo(mapPad+player.x*mapScale + Math.cos(player.dir)*10, mapPad+player.y*mapScale + Math.sin(player.dir)*10); ctx.stroke();
+
+        // Ponto dos Inimigos
+        enemies.forEach(e => {
+            if (e.state !== 'dead') {
+                ctx.fillStyle = e.color === '#aa00ff' ? "#ff00ff" : "#ff0000"; // Roxo para Chefes, Vermelho para Inimigos Normais
+                ctx.fillRect(mapPad + e.x * mapScale - 1.5, mapPad + e.y * mapScale - 1.5, 3, 3);
+            }
+        });
+
+        // Mensagens
+        if (msgTimer > 0) {
+            ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(0, 20, screenW, 30);
+            ctx.fillStyle = "#ffcc00"; ctx.font = "bold 16px 'Segoe UI'"; ctx.textAlign = "center";
+            ctx.fillText(currentMsg, screenW/2, 40);
+            msgTimer -= deltaTime; ctx.textAlign = "left";
+        }
+    }
+    requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>

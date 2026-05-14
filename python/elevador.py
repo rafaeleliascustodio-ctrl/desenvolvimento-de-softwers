@@ -44,4 +44,4 @@ while True: # Loop infinito para manter o programa em execução até que o usu�
         time.sleep(1)
         porta_aberta = False
         print("elevador pronto para o próximo destino.")
-        time.sleep(1)
+        time.sleep(1)   
